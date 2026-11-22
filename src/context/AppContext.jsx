@@ -31,12 +31,16 @@ export function AppProvider({ children }) {
     return () => clearTimeout(timer.current)
   }, [])
 
-  // Iniciar sesión
+  // Iniciar sesión. `u` debe traer el correo (u.correo).
   const login = (u, role) => {
+    const correo = String(u.correo || u.email || u.usuario || '').trim().toLowerCase() || null
+
     const s = {
       id: u.id,
+      idusuario: u.idusuario ?? null,
       nombre: u.nombre,
       tel: u.tel,
+      correo,
       role
     }
 
@@ -79,6 +83,7 @@ export function AppProvider({ children }) {
     <Ctx.Provider
       value={{
         ses,
+        user: ses,
         login,
         salir,
         entrar,

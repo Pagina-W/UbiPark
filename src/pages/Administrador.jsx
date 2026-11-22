@@ -46,6 +46,8 @@ const formatoFecha = (fecha) => {
     : valor.toLocaleString('es-MX')
 }
 
+const ESTADOS_RESENA = ['publicada', 'pendiente', 'oculta']
+
 const modulos = {
   usuarios: {
     titulo: 'Usuarios',
@@ -216,10 +218,10 @@ const modulos = {
 
   resenas: {
     titulo: 'Reseñas',
-    descripcion: 'Opiniones y calificaciones de los usuarios.',
+    descripcion: 'Revisa y modera las opiniones de los usuarios.',
     tabla: 'resenas',
     select: `
-      idresena, idestacionamiento, idusuario, calificacion, comentario, fecha,
+      idresena, idestacionamiento, idusuario, calificacion, comentario, fecha, estado,
       usuarios!resenas_idusuario_fkey(nombre, apellidos),
       estacionamientos!resenas_idestacionamiento_fkey(nombreestacionamiento)
     `,
@@ -229,6 +231,7 @@ const modulos = {
       ['estacionamiento', 'Estacionamiento'],
       ['calificacion', 'Calificación'],
       ['comentario', 'Comentario'],
+      ['estadoResenaTexto', 'Estado'],
       ['fecha', 'Fecha']
     ],
     preparar: (r) => ({
@@ -236,6 +239,7 @@ const modulos = {
       cliente: obtenerNombre(normalizarRelacion(r.usuarios)),
       estacionamiento: normalizarRelacion(r.estacionamientos).nombreestacionamiento || 'Sin estacionamiento',
       calificacion: `${r.calificacion} / 5`,
+      estadoResenaTexto: { publicada: 'Publicada', pendiente: 'Pendiente', oculta: 'Oculta' }[r.estado] || r.estado || '—',
       fecha: formatoFecha(r.fecha)
     })
   },
@@ -487,6 +491,30 @@ export default function Administrador() {
     setBusqueda('')
     setRegistroSeleccionado(null)
     setError('')
+    setFiltroEstado('todos')
+  }
+
+  /* Moderación de reseñas: cambia el estado a 'publicada', 'pendiente' u 'oculta' */
+  const moderarResena = async (registro, nuevoEstado) => {
+    if (!ESTADOS_RESENA.includes(nuevoEstado)) return
+
+    try {
+      const { data, error: errorEstado } = await supabase
+        .from('resenas')
+        .update({ estado: nuevoEstado })
+        .eq('idresena', registro.idresena)
+        .select('idresena, estado')
+
+      if (errorEstado) throw new Error(errorEstado.message)
+
+      if (!data || data.length === 0) {
+        throw new Error('Supabase no actualizó la reseña. Revisa las políticas (RLS) de la tabla resenas.')
+      }
+
+      await cargarModulo('resenas')
+    } catch (err) {
+      window.alert(err.message || 'No se pudo actualizar la reseña.')
+    }
   }
 
   const moduloActual = modulos[seccionActiva]
@@ -506,6 +534,10 @@ export default function Administrador() {
       coincideEstado = filtroEstado === 'activos'
         ? registro.activo === true
         : registro.activo === false
+    }
+
+    if (seccionActiva === 'resenas' && filtroEstado !== 'todos') {
+      coincideEstado = registro.estado === filtroEstado
     }
 
     return coincideTexto && coincideEstado
@@ -890,16 +922,37 @@ export default function Administrador() {
                     <option value="inactivos">Inactivos</option>
                   </select>
                 )}
+
+                {seccionActiva === 'resenas' && (
+                  <select
+                    value={filtroEstado}
+                    onChange={(e) => setFiltroEstado(e.target.value)}
+                    style={{
+                      padding: '12px 14px',
+                      border: '1px solid #dbe3ef',
+                      borderRadius: 10,
+                      background: 'white'
+                    }}
+                  >
+                    <option value="todos">Todas las reseñas</option>
+                    <option value="pendiente">Pendientes de revisión</option>
+                    <option value="publicada">Publicadas</option>
+                    <option value="oculta">Ocultas</option>
+                  </select>
+                )}
               </div>
 
-              <div style={{
-                background: 'white',
-                border: '1px solid #e5eaf2',
-                borderRadius: 14,
-                overflowX: 'auto',
-                boxShadow: '0 4px 18px rgba(20, 50, 90, 0.04)'
-              }}>
-                <table style={estiloTabla}>
+              <div
+                className="admin-table-wrapper"
+                style={{
+                  background: 'white',
+                  border: '1px solid #e5eaf2',
+                  borderRadius: 14,
+                  overflowX: 'auto',
+                  boxShadow: '0 4px 18px rgba(20, 50, 90, 0.04)'
+                }}
+              >
+                <table className="admin-data-table" style={estiloTabla}>
                   <thead>
                     <tr style={{ background: '#f5f8fc' }}>
                       {[
@@ -941,7 +994,14 @@ export default function Administrador() {
                         <tr key={registro.idusuario || registro.idestacionamiento || registro.idreserva || registro.idvehiculo || registro.idlocalidad || registro.idresena || registro.idrol || registro.idlog || indice}>
                           {(moduloActual?.columnas || []).map(([campo]) => (
                             <td key={campo} style={estiloCelda}>
-                              {campo === 'activo' || campo === 'estadoTexto' ? (
+                              {campo === 'estadoResenaTexto' ? (
+                                <span style={{
+                                  fontWeight: 700,
+                                  color: { publicada: '#16834a', pendiente: '#d98200', oculta: '#c0392b' }[registro.estado] || '#344054'
+                                }}>
+                                  {registro[campo]}
+                                </span>
+                              ) : campo === 'activo' || campo === 'estadoTexto' ? (
                                 <span style={{
                                   color: registro.activo === false || registro.estadoTexto === 'Inactivo' ? '#c0392b' : '#16834a',
                                   fontWeight: 700
@@ -954,20 +1014,56 @@ export default function Administrador() {
                             </td>
                           ))}
                           <td style={estiloCelda}>
-                            <button
-                              onClick={() => setRegistroSeleccionado(registro)}
-                              style={{
-                                border: 'none',
-                                borderRadius: 8,
-                                padding: '8px 12px',
-                                background: '#eaf3ff',
-                                color: '#1769aa',
-                                cursor: 'pointer',
-                                fontWeight: 600
-                              }}
-                            >
-                              Ver detalles
-                            </button>
+                            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                              <button
+                                onClick={() => setRegistroSeleccionado(registro)}
+                                style={{
+                                  border: 'none',
+                                  borderRadius: 8,
+                                  padding: '8px 12px',
+                                  background: '#eaf3ff',
+                                  color: '#1769aa',
+                                  cursor: 'pointer',
+                                  fontWeight: 600
+                                }}
+                              >
+                                Ver detalles
+                              </button>
+
+                              {seccionActiva === 'resenas' && registro.estado !== 'publicada' && (
+                                <button
+                                  onClick={() => moderarResena(registro, 'publicada')}
+                                  style={{
+                                    border: 'none',
+                                    borderRadius: 8,
+                                    padding: '8px 12px',
+                                    background: '#e6f6ec',
+                                    color: '#16834a',
+                                    cursor: 'pointer',
+                                    fontWeight: 600
+                                  }}
+                                >
+                                  ✓ Aprobar
+                                </button>
+                              )}
+
+                              {seccionActiva === 'resenas' && registro.estado !== 'oculta' && (
+                                <button
+                                  onClick={() => moderarResena(registro, 'oculta')}
+                                  style={{
+                                    border: 'none',
+                                    borderRadius: 8,
+                                    padding: '8px 12px',
+                                    background: '#fdeaea',
+                                    color: '#c0392b',
+                                    cursor: 'pointer',
+                                    fontWeight: 600
+                                  }}
+                                >
+                                  ✕ Rechazar
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       ))
@@ -1023,6 +1119,49 @@ export default function Administrador() {
                     </p>
                   ))}
 
+                {seccionActiva === 'resenas' && (
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', margin: '16px 0' }}>
+                    {registroSeleccionado.estado !== 'publicada' && (
+                      <button
+                        onClick={async () => {
+                          await moderarResena(registroSeleccionado, 'publicada')
+                          setRegistroSeleccionado(null)
+                        }}
+                        style={{
+                          border: 'none',
+                          borderRadius: 8,
+                          padding: '10px 14px',
+                          background: '#e6f6ec',
+                          color: '#16834a',
+                          cursor: 'pointer',
+                          fontWeight: 600
+                        }}
+                      >
+                        ✓ Aprobar
+                      </button>
+                    )}
+                    {registroSeleccionado.estado !== 'oculta' && (
+                      <button
+                        onClick={async () => {
+                          await moderarResena(registroSeleccionado, 'oculta')
+                          setRegistroSeleccionado(null)
+                        }}
+                        style={{
+                          border: 'none',
+                          borderRadius: 8,
+                          padding: '10px 14px',
+                          background: '#fdeaea',
+                          color: '#c0392b',
+                          cursor: 'pointer',
+                          fontWeight: 600
+                        }}
+                      >
+                        ✕ Rechazar
+                      </button>
+                    )}
+                  </div>
+                )}
+
                 <button
                   className="admin-back-button"
                   onClick={() => setRegistroSeleccionado(null)}
@@ -1033,9 +1172,7 @@ export default function Administrador() {
             </div>
           )}
 
-          <footer className="admin-footer">
-            © 2026 UbiPark · Sistema de administración
-          </footer>
+      
         </div>
       </main>
     </div>

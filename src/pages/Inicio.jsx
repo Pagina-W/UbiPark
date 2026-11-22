@@ -12,7 +12,7 @@ export default function Inicio() {
   const [comentario, setComentario] = useState('')
 
   useEffect(() => {
-    document.title = 'GoParking | Renta de estacionamientos locales'
+    document.title = 'UbiPark | Renta de estacionamientos locales'
   }, [])
 
   const resenas = DB.get('resenas', []).slice(-3)

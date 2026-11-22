@@ -1,14 +1,21 @@
 import { useEffect, useState } from 'react'
 import { useApp } from '../context/AppContext.jsx'
-import { useSearchParams, Link } from 'react-router-dom'
+import { useSearchParams, Link, useNavigate } from 'react-router-dom'
 import { registrarUsuario, iniciarSesion } from '../services/authService.js'
 
 export default function Acceso() {
   const [params] = useSearchParams()
   const { login, toast } = useApp()
+  const navigate = useNavigate()
 
   const role = params.get('rol') || 'cliente'
   const esAdmin = role === 'administrador'
+
+  const destino = {
+    cliente: '/cliente',
+    propietario: '/propietario',
+    administrador: '/administrador'
+  }
 
   const [tab, setTab] = useState('log')
   const [cargando, setCargando] = useState(false)
@@ -22,10 +29,7 @@ export default function Acceso() {
   })
 
   const set = (k) => (e) =>
-    setF((anterior) => ({
-      ...anterior,
-      [k]: e.target.value
-    }))
+    setF({ ...f, [k]: e.target.value })
 
   useEffect(() => {
     document.title = 'UbiPark | Acceso'
@@ -43,7 +47,6 @@ export default function Acceso() {
     try {
       if (tab === 'reg') {
 
-        // No permitir registros de administradores
         if (esAdmin) {
           throw new Error(
             'El registro de administradores no está permitido.'
@@ -64,7 +67,8 @@ export default function Acceso() {
         })
 
         toast('¡Cuenta creada exitosamente!')
-        login(usuarioCreado, role)
+        login({ ...usuarioCreado, correo: m }, role)
+        navigate(destino[role] || '/', { replace: true })
 
       } else {
 
@@ -82,7 +86,8 @@ export default function Acceso() {
         }
 
         toast('¡Bienvenido de nuevo!')
-        login(datosSesion, rolReal)
+        login({ ...datosSesion, correo: m }, rolReal)
+        navigate(destino[rolReal] || '/', { replace: true })
       }
 
     } catch (error) {
@@ -156,7 +161,7 @@ export default function Acceso() {
                   </div>
                 </div>
 
-                <label>Teléfono</label>
+                <label>Teléfono / WhatsApp</label>
                 <input
                   type="tel"
                   required

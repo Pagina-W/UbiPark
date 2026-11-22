@@ -1,128 +1,363 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { QRCodeSVG } from 'qrcode.react'
-import { DB, avg, stars } from '../lib/db.js'
+import { stars } from '../lib/db.js'
 import { useApp } from '../context/AppContext.jsx'
 import { MapaLugar } from '../components/MapaGoogle.jsx'
+import TarjetaQR from '../components/tarjetaQR.jsx'
+import { distanciaKm, obtenerIdUsuario, waNumero } from '../lib/idusuario.js'
+import { obtenerLugar, obtenerLugares } from '../services/lugarService.js'
+import Resenas from './resenas.jsx'
+import { resumenResenas } from '../services/resenaService.js'
+import { crearReserva, obtenerReserva, subirComprobante } from '../services/reservaService.js'
+import { aInputLocal, calcularRango, primeraEntrada } from '../lib/horario.js'
 
-/* PÁGINA DEL LUGAR: info, mapa, reseñas, WhatsApp, folio y QR */
+const ahoraLocal = () => aInputLocal(new Date())
+
+const aMin = (t) => { const [h, m] = String(t || '0:0').split(':'); return (+h || 0) * 60 + (+m || 0) }
+
+/* Tarifas generadas a partir del precio por hora y el horario que registró el propietario */
+function generarTarifas(l) {
+  let abierto = (aMin(l.cierre) - aMin(l.apertura)) / 60
+  if (!(abierto > 0)) abierto = abierto === 0 ? 24 : abierto + 24
+  abierto = Math.round(abierto * 2) / 2
+  const horas = [1, 2, 3, 4, 6, 8].filter((h) => h < abierto)
+  const t = horas.map((h) => ({ id: 'h' + h, tipo: 'hora', cantidad: h, horas: h, etiqueta: h === 1 ? '1 hora' : `${h} horas`, detalle: '', precio: l.pph * h }))
+  t.push({ id: 'dia', tipo: 'dia', cantidad: 1, horas: abierto, etiqueta: 'Día completo', detalle: `${l.apertura} – ${l.cierre}`, precio: l.pph * abierto })
+  return t
+}
+
+const dinero = (n) => '$' + Number(n).toLocaleString('es-MX', { maximumFractionDigits: 2 })
+const aFecha = (s) => new Date(String(s).endsWith('Z') ? s : s + 'Z')
+const hora12 = (d) => d.toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' })
+
+/* PÁGINA DEL LUGAR: todo viene de Supabase (lo que publicó el propietario) */
 export default function Lugar() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const { ses, entrar, toast } = useApp()
-  const l = useMemo(() => DB.get('lugares', []).find((x) => x.id == id), [id])
-  const [resenas, setResenas] = useState(() => DB.get('resenas', []).filter((x) => x.l == id))
-  const [veh, setVeh] = useState(l?.tipos[0] || '')
-  const [hrs, setHrs] = useState(2)
-  const [pref, setPref] = useState('')
-  const [pago, setPago] = useState(false)
-  const [folio, setFolio] = useState(null)
-  const [rv, setRv] = useState({ s: '5', t: '' })
+  const { ses, entrar, toast, user } = useApp()
+  const idUsuario = obtenerIdUsuario(user, ses)
+  const cl = ses && ses.role === 'cliente'
 
-  useEffect(() => { document.title = 'GoParking | Estacionamiento' }, [])
+  const [l, setL] = useState(null)
+  const [cargando, setCargando] = useState(true)
+  const [resumen, setResumen] = useState(null)
+  const [cercanos, setCercanos] = useState([])
+  const [foto, setFoto] = useState(0)
+
+  const [veh, setVeh] = useState('')
+  const [tarifaId, setTarifaId] = useState('h2')
+  const [entrada, setEntrada] = useState(ahoraLocal())
+  const [fechaDia, setFechaDia] = useState(ahoraLocal().slice(0, 10))
+  const [pref, setPref] = useState('')
+  const [placa, setPlaca] = useState('')
+  const [pago, setPago] = useState(false)
+  const [metodo, setMetodo] = useState('')
+  const [comp, setComp] = useState(null)
+  const [enviando, setEnviando] = useState(false)
+  const [reserva, setReserva] = useState(null)
+  const inicializado = useRef(false)
+
+  const volver = () => {
+    if (window.history.state && window.history.state.idx > 0) navigate(-1)
+    else navigate(ses?.role === 'propietario' ? '/propietario' : ses ? '/cliente' : '/')
+  }
+
+  useEffect(() => { document.title = 'UbiPark | Estacionamiento' }, [])
+
+  const cargar = useCallback(async () => {
+    try {
+      const lugar = await obtenerLugar(id)
+      setL(lugar)
+      if (lugar) {
+        try { setResumen((await resumenResenas(id))?.[0] ?? null) } catch { setResumen(null) }
+        setVeh((v) => v || lugar.tipos[0] || '')
+        if (!lugar.disponible && lugar.lat != null) {
+          const todos = await obtenerLugares()
+          setCercanos(
+            todos.filter((x) => x.id != lugar.id && x.disponible && x.lat != null)
+              .map((x) => ({ ...x, km: distanciaKm(lugar.lat, lugar.lng, x.lat, x.lng) }))
+              .sort((a, b) => a.km - b.km).slice(0, 3))
+        } else setCercanos([])
+      }
+    } catch (e) {
+      toast(e.message)
+    } finally {
+      setCargando(false)
+    }
+  }, [id])
+
+  useEffect(() => { cargar() }, [cargar])
+
+  /* Al cargar el lugar, la entrada empieza en la primera hora válida dentro de su horario */
+  useEffect(() => {
+    if (!l || inicializado.current) return
+    inicializado.current = true
+    const e = primeraEntrada(l.apertura, l.cierre, 1)
+    setEntrada(aInputLocal(e))
+    const hoy = calcularRango({ tipo: 'dia', fechaDia: ahoraLocal().slice(0, 10), apertura: l.apertura, cierre: l.cierre })
+    if (hoy.error) {
+      const man = new Date(); man.setDate(man.getDate() + 1)
+      setFechaDia(aInputLocal(man).slice(0, 10))
+    }
+  }, [l])
+
+  /* La reserva se refresca sola mientras el dueño la verifica o la cobra */
+  useEffect(() => {
+    if (!reserva || reserva.qr_usado) return
+    const t = setInterval(async () => {
+      try { setReserva(await obtenerReserva(reserva.idreserva)) } catch { /* se reintenta */ }
+    }, 8000)
+    return () => clearInterval(t)
+  }, [reserva?.idreserva, reserva?.qr_usado])
+
+  const tarifas = useMemo(() => (l ? generarTarifas(l) : []), [l])
+  const tarifa = tarifas.find((t) => t.id === tarifaId) || tarifas[0]
+
+  /* Rango real de la reserva y qué tarifas caben en el horario del lugar */
+  const rangoDe = (t) => calcularRango({
+    tipo: t.tipo, horas: t.horas, entrada, fechaDia, apertura: l?.apertura, cierre: l?.cierre,
+  })
+  const rango = l && tarifa ? rangoDe(tarifa) : null
+  const caben = useMemo(
+    () => Object.fromEntries(tarifas.map((t) => [t.id, !rangoDe(t).error])),
+    [tarifas, entrada, fechaDia, l]
+  )
+
+  if (cargando) return <div className="view on"><div className="wrap"><p className="sub" style={{ marginTop: 20 }}>Cargando…</p></div></div>
+
+  const botonVolver = (
+    <p style={{ marginTop: 20 }}>
+      <button type="button" onClick={volver}
+        style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer', color: 'var(--blue)', fontWeight: 600, fontSize: 'inherit' }}>
+        ← Volver
+      </button>
+    </p>
+  )
 
   if (!l) {
     return (
       <div className="view on"><div className="wrap">
-        <p style={{ marginTop: 20 }}><Link to="/" style={{ color: 'var(--blue)', fontWeight: 600 }}>← Volver</Link></p>
+        {botonVolver}
         <p className="sub" style={{ marginTop: 20 }}>No encontramos este estacionamiento.</p>
       </div></div>
     )
   }
 
-  const cl = ses && ses.role === 'cliente'
-  const total = l.pph * (+hrs || 1)
+  const proxima = l.proxima_salida ? aFecha(l.proxima_salida) : null
+  const horaProx = proxima && proxima.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })
+  const pocosLugares = l.disponible && l.libres <= 1 && proxima
 
   const wsp = () => {
-    const m = `Hola, soy ${ses.nombre}. Me interesa "${l.nombre}" para un ${veh} por ${hrs} hora(s).${pref ? ' Prefiero: ' + pref + '.' : ''} ¿Está disponible y cómo puedo pagar?`
-    window.open(`https://wa.me/${l.tel}?text=${encodeURIComponent(m)}`, '_blank')
+    if (!l.tel) return toast('Este dueño aún no tiene un número de contacto registrado.')
+    if (rango?.error) return toast(rango.error)
+    const m = `Hola, soy ${ses.nombre}. Me interesa "${l.nombre}" en UbiPark para un ${veh || 'vehículo'}: ${tarifa.etiqueta} (${dinero(tarifa.precio)}), de ${hora12(rango.ini)} a ${hora12(rango.fin)}.${pref ? ' Prefiero: ' + pref + '.' : ''} ¿Está disponible y cómo puedo pagar?`
+    window.open(`https://wa.me/${waNumero(l.tel)}?text=${encodeURIComponent(m)}`, '_blank')
     setPago(true)
   }
 
-  const crearFolio = (t) => {
-    const F = DB.get('folios', [])
-    const f = {
-      id: t + '-' + Math.floor(1000 + Math.random() * 9000), lugar: l.id, lugarN: l.nombre, owner: l.owner,
-      cliente: ses.nombre, tel: ses.tel, veh, hrs: +hrs, pref, total,
-      estado: t === 'TRA' ? 'pagado' : 'pendiente', fecha: new Date().toLocaleString('es-MX'),
+  const confirmar = async () => {
+    if (!idUsuario) return toast('Vuelve a iniciar sesión.')
+    if (rango?.error) return toast(rango.error)
+    if (!metodo) return toast('Elige cómo acordaron el pago.')
+    if (!placa.trim()) return toast('Escribe la placa de tu vehículo.')
+    if (metodo === 'transferencia' && !comp) return toast('Sube la imagen del comprobante de transferencia.')
+    setEnviando(true)
+    try {
+      const fresco = await obtenerLugar(id)          // revisa cupo justo antes de reservar
+      if (!fresco?.disponible) { setL(fresco); throw new Error('Este lugar se acaba de llenar.') }
+      const url = metodo === 'transferencia' ? await subirComprobante(comp, idUsuario) : null
+      const r = await crearReserva({
+        idestacionamiento: l.id, idusuario: idUsuario,
+        entrada: rango.ini.toISOString(), salida: rango.fin.toISOString(),
+        total: tarifa.precio, tipo: tarifa.tipo, cantidad: tarifa.cantidad, vehiculo: veh, placa, preferencia: pref,
+        metodo, comprobante_url: url,
+      })
+      setReserva(r)
+      toast(metodo === 'transferencia' ? 'Comprobante enviado. Aquí tienes tu QR.' : 'Lugar apartado. Paga en físico al llegar.')
+      cargar()
+    } catch (e) {
+      toast(e.message)
+    } finally {
+      setEnviando(false)
     }
-    F.push(f)
-    DB.set('folios', F)
-    setFolio(f)
-  }
-
-  const enviarResena = (e) => {
-    e.preventDefault()
-    const R = DB.get('resenas', [])
-    R.push({ l: l.id, n: ses.nombre, r: 'Conductor', s: +rv.s, t: rv.t })
-    DB.set('resenas', R)
-    setResenas(R.filter((x) => x.l == l.id))
-    setRv({ s: '5', t: '' })
   }
 
   const login = () => {
-    sessionStorage.setItem('gp_next', location.hash.slice(1) || '/')
+    sessionStorage.setItem('gp_next', location.pathname)
     entrar('cliente')
   }
 
-  const pagado = folio?.estado === 'pagado'
+  const ubicacion = [l.dir, l.localidad, l.municipio, l.estado].filter(Boolean).join(', ')
 
   return (
     <div className="view on"><div className="wrap">
-      <p style={{ marginTop: 20 }}><Link to="/" style={{ color: 'var(--blue)', fontWeight: 600 }}>← Volver</Link></p>
+      {botonVolver}
       <div className="detail">
         <div>
+          {/* Galería */}
           <div className="gal">
             {(l.fotos.length ? l.fotos : [null]).map((f, i) => (
-              <div className="ph" key={i} style={f ? { backgroundImage: `url(${f})` } : undefined}>{f ? '' : l.ico || '🅿️'}</div>
+              <div className="ph" key={i} style={f ? { backgroundImage: `url(${f})` } : undefined}
+                onClick={() => setFoto(i)}>{f ? '' : '🅿️'}</div>
             ))}
           </div>
+
           <h1 style={{ marginTop: 18 }}>{l.nombre}</h1>
-          <div className="stars">{stars(avg(l.id))} <small style={{ color: '#58708a', letterSpacing: 0 }}>({resenas.length} reseñas)</small></div>
-          <p>📍 {l.dir}, {l.estado}</p>
-          <p>🕒 {l.hor} · 💰 ${l.pph} MXN/hora · 🚘 {l.cap} lugares</p>
-          <h3 style={{ marginTop: 16 }}>Medidas máximas</h3>
-          <div className="chips"><span>Largo {l.L} m</span><span>Ancho {l.A} m</span><span>Altura {l.H} m</span></div>
-          <h3 style={{ marginTop: 16 }}>Vehículos permitidos</h3>
-          <div className="chips">{l.tipos.map((t) => <span key={t}>{t}</span>)}</div>
-          <h3 style={{ marginTop: 16 }}>Características</h3>
-          <div className="chips">{l.extras.length ? l.extras.map((t) => <span key={t}>{t}</span>) : '—'}</div>
-          <h3 style={{ marginTop: 16 }}>Reglamento</h3><p>{l.reg || '—'}</p>
-          <h3 style={{ margin: '16px 0 8px' }}>Ubicación</h3>
+          <div className="stars">
+            {stars(Math.round(Number(resumen?.promedio) || 0))}{' '}
+            <small style={{ color: '#58708a', letterSpacing: 0 }}>
+              {resumen?.total
+                ? `${Number(resumen.promedio).toFixed(1)} · ${resumen.total} ${resumen.total === 1 ? 'reseña' : 'reseñas'}`
+                : 'Sin reseñas todavía'}
+            </small>
+          </div>
+
+          {/* Disponibilidad en vivo */}
+          <p style={{ marginTop: 8 }}>
+            <span className={'badge ' + (l.disponible ? 'b-ok' : 'b-p')}>
+              {l.disponible ? `Disponible · ${l.libres} de ${l.cap} lugares libres` : 'No disponible'}
+            </span>
+          </p>
+          {!l.disponible && proxima && <p className="sub">Se libera un lugar aprox. a las {horaProx}.</p>}
+          {pocosLugares && <p className="sub">⏳ Queda poco cupo: se libera un lugar aprox. a las {horaProx}.</p>}
+
+          <h3 style={{ marginTop: 18 }}>Información</h3>
+          <p>📍 {ubicacion}</p>
+          {l.hor && <p>🕒 Horario: {l.hor}</p>}
+          <p>🚘 Capacidad: {l.cap} lugares</p>
+
+          {/* Tarifas calculadas del precio por hora del propietario */}
+          <h3 style={{ marginTop: 18 }}>Tarifas</h3>
+          <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', marginTop: 8 }}>
+            {tarifas.map((t) => {
+              const sel = t.id === tarifaId
+              const cabe = caben[t.id]
+              return (
+                <button key={t.id} type="button" onClick={() => setTarifaId(t.id)}
+                  title={cabe ? '' : 'No cabe en el horario del lugar con la entrada elegida'}
+                  style={{
+                    textAlign: 'left', cursor: 'pointer', padding: '12px 14px', borderRadius: 14, font: 'inherit',
+                    border: '2px solid ' + (sel ? 'var(--blue)' : 'var(--line)'),
+                    background: sel ? '#eaf3ff' : '#fff', color: 'inherit',
+                    opacity: cabe ? 1 : 0.45,
+                  }}>
+                  <b>{t.etiqueta}</b><br />
+                  <span style={{ fontSize: '1.15rem', fontWeight: 700 }}>{dinero(t.precio)}</span>
+                  {t.detalle && <><br /><small>{t.detalle}</small></>}
+                </button>
+              )
+            })}
+          </div>
+          <p className="sub" style={{ fontSize: '.8rem', marginTop: 6 }}>
+            Precio base: {dinero(l.pph)} por hora. Las tarifas atenuadas no caben en el horario con la entrada elegida.
+          </p>
+
+          {l.tipos.length > 0 && (<><h3 style={{ marginTop: 18 }}>Vehículos permitidos</h3>
+            <div className="chips">{l.tipos.map((t) => <span key={t}>{t}</span>)}</div></>)}
+
+          {(l.L || l.A || l.H) && (<><h3 style={{ marginTop: 18 }}>Medidas máximas</h3>
+            <div className="chips">
+              {l.L && <span>Largo {l.L} m</span>}{l.A && <span>Ancho {l.A} m</span>}{l.H && <span>Altura {l.H} m</span>}
+            </div></>)}
+
+          {l.extras.length > 0 && (<><h3 style={{ marginTop: 18 }}>Características</h3>
+            <div className="chips">{l.extras.map((t) => <span key={t}>{t}</span>)}</div></>)}
+
+          {l.reg && (<><h3 style={{ marginTop: 18 }}>Reglamento</h3><p>{l.reg}</p></>)}
+
+          <h3 style={{ margin: '18px 0 8px' }}>Ubicación</h3>
           <MapaLugar lat={l.lat} lng={l.lng} />
+
+          {!l.disponible && cercanos.length > 0 && (
+            <>
+              <h3 style={{ margin: '20px 0 8px' }}>Otros estacionamientos cerca con lugar</h3>
+              {cercanos.map((c) => (
+                <p key={c.id} style={{ padding: '6px 0', borderBottom: '1px solid var(--line)' }}>
+                  <Link to={`/lugar/${c.id}`} style={{ color: 'var(--blue)', fontWeight: 600 }}>{c.nombre}</Link>
+                  {' '}<small>· {c.km.toFixed(1)} km · {dinero(c.pph)}/h · {c.libres} libres</small>
+                </p>
+              ))}
+            </>
+          )}
         </div>
 
+        {/* Reservar */}
         <div><div className="box"><h3>Reservar</h3>
           {cl ? (
-            <>
-              <label>Tipo de vehículo</label>
-              <select value={veh} onChange={(e) => setVeh(e.target.value)}>{l.tipos.map((t) => <option key={t}>{t}</option>)}</select>
-              <label>Horas</label>
-              <input type="number" min="1" value={hrs} onChange={(e) => setHrs(e.target.value)} />
-              <label>Preferencias (ej. lugar con sombra)</label>
-              <input placeholder="Opcional" value={pref} onChange={(e) => setPref(e.target.value)} />
-              <p style={{ marginTop: 10 }}>Total estimado: <b>${total}</b></p>
-              <button className="btn green" style={{ width: '100%', marginTop: 12 }} onClick={wsp}>📱 Contactar por WhatsApp</button>
-              {pago && (
-                <div style={{ marginTop: 18 }}><h3>¿Cómo acordaron el pago?</h3>
-                  <div className="g2" style={{ marginTop: 8 }}>
-                    <button className="btn dark" onClick={() => crearFolio('EFE')}>💵 Efectivo</button>
-                    <button className="btn" onClick={() => crearFolio('TRA')}>💳 Transferencia</button>
+            reserva ? (
+              <TarjetaQR r={reserva} lugar={l.nombre} />
+            ) : !l.disponible ? (
+              <p className="sub">Este lugar está lleno por ahora.{proxima ? ` Se libera aprox. a las ${horaProx}.` : ''} Revisa los estacionamientos cercanos.</p>
+            ) : (
+              <>
+                {l.tipos.length > 0 && (<>
+                  <label>Tipo de vehículo</label>
+                  <select value={veh} onChange={(e) => setVeh(e.target.value)}>{l.tipos.map((t) => <option key={t}>{t}</option>)}</select>
+                </>)}
+                <label>Placa del vehículo</label>
+                <input placeholder="Ej. ABC-123-D" maxLength={20} value={placa} onChange={(e) => setPlaca(e.target.value)} />
+                <label>Tarifa</label>
+                <select value={tarifaId} onChange={(e) => setTarifaId(e.target.value)}>
+                  {tarifas.map((t) => (
+                    <option key={t.id} value={t.id} disabled={!caben[t.id]}>
+                      {t.etiqueta} · {dinero(t.precio)}{caben[t.id] ? '' : ' (fuera de horario)'}
+                    </option>
+                  ))}
+                </select>
+
+                {tarifa.tipo === 'dia' ? (
+                  <>
+                    <label>Día (entras a las {l.apertura} y sales a las {l.cierre})</label>
+                    <input type="date" min={ahoraLocal().slice(0, 10)} value={fechaDia} onChange={(e) => setFechaDia(e.target.value)} />
+                  </>
+                ) : (
+                  <>
+                    <label>Entrada (horario del lugar: {l.apertura} – {l.cierre})</label>
+                    <input type="datetime-local" min={ahoraLocal()} value={entrada} onChange={(e) => setEntrada(e.target.value)} />
+                  </>
+                )}
+
+                {rango?.error ? (
+                  <p style={{ color: '#b91c1c', fontSize: '.8rem', marginTop: 6 }}>⚠️ {rango.error}</p>
+                ) : rango && (
+                  <p className="sub" style={{ fontSize: '.8rem', marginTop: 6 }}>
+                    🕒 {hora12(rango.ini)} → {hora12(rango.fin)}
+                  </p>
+                )}
+
+                <label>Preferencias (ej. lugar con sombra)</label>
+                <input placeholder="Opcional" value={pref} onChange={(e) => setPref(e.target.value)} />
+                <p style={{ marginTop: 10 }}>Total: <b>{dinero(tarifa.precio)}</b></p>
+
+                <button className="btn green" style={{ width: '100%', marginTop: 12 }} onClick={wsp} disabled={Boolean(rango?.error)}>
+                  📱 Contactar por WhatsApp
+                </button>
+
+                {pago && (
+                  <div style={{ marginTop: 18 }}>
+                    <h3>¿Cómo acordaron el pago?</h3>
+                    <div className="g2" style={{ marginTop: 8 }}>
+                      <button type="button" className={'btn ' + (metodo === 'efectivo' ? '' : 'dark')} onClick={() => setMetodo('efectivo')}>💵 Físico</button>
+                      <button type="button" className={'btn ' + (metodo === 'transferencia' ? '' : 'ghost')} onClick={() => setMetodo('transferencia')}>💳 Transferencia</button>
+                    </div>
+                    {metodo === 'transferencia' && (
+                      <>
+                        <label>Imagen del comprobante</label>
+                        <input type="file" accept="image/*" onChange={(e) => setComp(e.target.files[0] || null)} />
+                      </>
+                    )}
+                    {metodo === 'efectivo' && (
+                      <p className="sub" style={{ fontSize: '.78rem', marginTop: 8 }}>Apartarás el lugar y pagarás en físico. Tu QR indicará que el pago sigue pendiente.</p>
+                    )}
+                    {metodo && (
+                      <button className="btn" style={{ width: '100%', marginTop: 12 }} onClick={confirmar} disabled={enviando || Boolean(rango?.error)}>
+                        {enviando ? 'Enviando…' : 'Generar mi comprobante y QR'}
+                      </button>
+                    )}
                   </div>
-                </div>
-              )}
-              {folio && (
-                <div className={'folio ' + (pagado ? 'paid' : 'pend')}>
-                  <b>{pagado ? '✅ Reservado y pagado' : '⏳ Apartado · pago pendiente en físico'}</b>
-                  <code>{folio.id}</code>
-                  <div id="qr">
-                    <QRCodeSVG size={150} fgColor={pagado ? '#0b7a3b' : '#9a6200'} value={`GOPARKING|${folio.id}|${folio.lugarN}|${folio.cliente}|${folio.estado.toUpperCase()}`} />
-                  </div>
-                  <small>{folio.lugarN} · {folio.veh} · {folio.hrs} h · ${folio.total} MXN<br />{folio.cliente} · {folio.fecha}</small>
-                  <p style={{ fontSize: '.8rem', marginTop: 6 }}>Muestra este código al dueño al llegar.</p>
-                </div>
-              )}
-            </>
+                )}
+              </>
+            )
           ) : (
             <>
               <p className="sub">Inicia sesión como cliente para reservar.</p>
@@ -132,19 +367,8 @@ export default function Lugar() {
         </div></div>
       </div>
 
-      <div className="box" style={{ marginBottom: 20 }}><h3>Reseñas</h3>
-        {resenas.length ? resenas.map((r, i) => (
-          <p style={{ marginTop: 10 }} key={i}><span className="stars">{stars(r.s)}</span> <b>{r.n}</b> ({r.r})<br />{r.t}</p>
-        )) : <p className="sub">Aún sin reseñas</p>}
-        {cl && (
-          <form onSubmit={enviarResena} className="g2" style={{ marginTop: 14 }}>
-            <select value={rv.s} onChange={(e) => setRv({ ...rv, s: e.target.value })}>
-              <option value="5">★★★★★</option><option value="4">★★★★☆</option><option value="3">★★★☆☆</option>
-            </select>
-            <input placeholder="Tu opinión" required value={rv.t} onChange={(e) => setRv({ ...rv, t: e.target.value })} />
-            <button className="btn sm">Enviar</button>
-          </form>
-        )}
+      <div style={{ marginBottom: 20 }}>
+        <Resenas idEstacionamiento={l.id} onCambio={cargar} actualizar={reserva?.qr_usado} />
       </div>
     </div></div>
   )
