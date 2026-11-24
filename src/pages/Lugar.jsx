@@ -129,7 +129,7 @@ export default function Lugar() {
     <p style={{ marginTop: 20 }}>
       <button type="button" onClick={volver}
         style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer', color: 'var(--blue)', fontWeight: 600, fontSize: 'inherit' }}>
-        ← Volver
+        ⬅ Volver
       </button>
     </p>
   )
@@ -219,12 +219,12 @@ export default function Lugar() {
             </span>
           </p>
           {!l.disponible && proxima && <p className="sub">Se libera un lugar aprox. a las {horaProx}.</p>}
-          {pocosLugares && <p className="sub">⏳ Queda poco cupo: se libera un lugar aprox. a las {horaProx}.</p>}
+          {pocosLugares && <p className="sub">⌛︎ Queda poco cupo: se libera un lugar aprox. a las {horaProx}.</p>}
 
           <h3 style={{ marginTop: 18 }}>Información</h3>
-          <p>📍 {ubicacion}</p>
-          {l.hor && <p>🕒 Horario: {l.hor}</p>}
-          <p>🚘 Capacidad: {l.cap} lugares</p>
+          <p> ⚲ {ubicacion}</p>
+          {l.hor && <p>⏲ Horario: {l.hor}</p>}
+          <p>⛟ Capacidad: {l.cap} lugares</p>
 
           {/* Tarifas calculadas del precio por hora del propietario */}
           <h3 style={{ marginTop: 18 }}>Tarifas</h3>
@@ -321,7 +321,7 @@ export default function Lugar() {
                   <p style={{ color: '#b91c1c', fontSize: '.8rem', marginTop: 6 }}>⚠️ {rango.error}</p>
                 ) : rango && (
                   <p className="sub" style={{ fontSize: '.8rem', marginTop: 6 }}>
-                    🕒 {hora12(rango.ini)} → {hora12(rango.fin)}
+                    ⏲ {hora12(rango.ini)} → {hora12(rango.fin)}
                   </p>
                 )}
 
@@ -330,14 +330,14 @@ export default function Lugar() {
                 <p style={{ marginTop: 10 }}>Total: <b>{dinero(tarifa.precio)}</b></p>
 
                 <button className="btn green" style={{ width: '100%', marginTop: 12 }} onClick={wsp} disabled={Boolean(rango?.error)}>
-                  📱 Contactar por WhatsApp
+                  ✆ Contactar por WhatsApp
                 </button>
 
                 {pago && (
                   <div style={{ marginTop: 18 }}>
                     <h3>¿Cómo acordaron el pago?</h3>
                     <div className="g2" style={{ marginTop: 8 }}>
-                      <button type="button" className={'btn ' + (metodo === 'efectivo' ? '' : 'dark')} onClick={() => setMetodo('efectivo')}>💵 Físico</button>
+                      <button type="button" className={'btn ' + (metodo === 'efectivo' ? '' : 'dark')} onClick={() => setMetodo('efectivo')}>⛀⛁ Físico</button>
                       <button type="button" className={'btn ' + (metodo === 'transferencia' ? '' : 'ghost')} onClick={() => setMetodo('transferencia')}>💳 Transferencia</button>
                     </div>
                     {metodo === 'transferencia' && (

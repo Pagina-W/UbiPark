@@ -1,3 +1,4 @@
+
 import {
   createContext,
   useCallback,
@@ -21,21 +22,28 @@ export function AppProvider({ children }) {
   const [msg, setMsg] = useState('')
   const timer = useRef(null)
 
+  // NOTIFICACIONES
   const toast = useCallback((m) => {
     setMsg(m)
     clearTimeout(timer.current)
-    timer.current = setTimeout(() => setMsg(''), 2600)
+
+    timer.current = setTimeout(() => {
+      setMsg('')
+    }, 2600)
   }, [])
 
   useEffect(() => {
     return () => clearTimeout(timer.current)
   }, [])
 
-  // Iniciar sesión. `u` debe traer el correo (u.correo).
+  // INICIAR SESIÓN
   const login = (u, role) => {
-    const correo = String(u.correo || u.email || u.usuario || '').trim().toLowerCase() || null
+    const correo = String(
+      u.correo || u.email || u.usuario || ''
+    ).trim().toLowerCase() || null
 
     const s = {
+      ...u,
       id: u.id,
       idusuario: u.idusuario ?? null,
       nombre: u.nombre,
@@ -47,31 +55,44 @@ export function AppProvider({ children }) {
     DB.set('ses', s)
     setSes(s)
 
+    // Recuperar destino guardado
     const next = sessionStorage.getItem('gp_next')
+
+    // Limpiar destino
     sessionStorage.removeItem('gp_next')
 
-    if (role === 'administrador') {
-      navigate('/administrador')
+    // REDIRECCIÓN
+    if (next) {
+      navigate(next, { replace: true })
+    } else if (role === 'administrador') {
+      navigate('/administrador', { replace: true })
     } else if (role === 'propietario') {
-      navigate('/propietario')
+      navigate('/propietario', { replace: true })
     } else {
-      navigate(next || '/')
+      navigate('/', { replace: true })
     }
   }
 
-  // Cerrar sesión
+  // CERRAR SESIÓN
   const salir = () => {
     DB.remove('ses')
     setSes(null)
-    navigate('/')
+
+    sessionStorage.removeItem('gp_next')
+
+    navigate('/', { replace: true })
   }
 
-  // Navegación según el rol
+  // NAVEGACIÓN SEGÚN EL ROL
   const entrar = (r) => {
     if (ses && ses.role === r) {
-      if (r === 'administrador') navigate('/administrador')
-      else if (r === 'propietario') navigate('/propietario')
-      else navigate('/')
+      if (r === 'administrador') {
+        navigate('/administrador')
+      } else if (r === 'propietario') {
+        navigate('/propietario')
+      } else {
+        navigate('/')
+      }
 
       return
     }

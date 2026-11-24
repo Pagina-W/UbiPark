@@ -33,7 +33,7 @@ export default function Header() {
             fontSize: '25px'
           }}>
             <span style={{ color: 'black' }}>Ubi</span>
-            <span style={{ color: '#0090E7' }}>Park</span>
+            <span style={{ color: '#0090E7' }}>Park </span> 
             <img src="src/components/123.png" width="17" height="17" alt="" />
           </span>
         </div>

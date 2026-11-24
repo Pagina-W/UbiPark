@@ -1,3 +1,4 @@
+
 import { useEffect, useState } from 'react'
 import { useApp } from '../context/AppContext.jsx'
 import { useSearchParams, Link, useNavigate } from 'react-router-dom'
@@ -29,7 +30,10 @@ export default function Acceso() {
   })
 
   const set = (k) => (e) =>
-    setF({ ...f, [k]: e.target.value })
+    setF((anterior) => ({
+      ...anterior,
+      [k]: e.target.value
+    }))
 
   useEffect(() => {
     document.title = 'UbiPark | Acceso'
@@ -66,8 +70,9 @@ export default function Acceso() {
           idRol: idRolTarget
         })
 
-        toast('¡Cuenta creada exitosamente!')
-        login({ ...usuarioCreado, correo: m }, role)
+       toast('¡Bienvenido de nuevo!')
+login({ ...datosSesion, correo: m }, rolReal)
+
         navigate(destino[role] || '/', { replace: true })
 
       } else {
@@ -87,6 +92,7 @@ export default function Acceso() {
 
         toast('¡Bienvenido de nuevo!')
         login({ ...datosSesion, correo: m }, rolReal)
+
         navigate(destino[rolReal] || '/', { replace: true })
       }
 
